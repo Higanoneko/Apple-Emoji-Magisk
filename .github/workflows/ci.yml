@@ -1,0 +1,172 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '.github/**'
+      - 'README.md'
+      - 'Changelog.md'
+      - 'LICENSE'
+      - '*.png'
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Upstream Font Tag
+        id: upstream
+        run: |
+          RELEASE_JSON=$(curl -sL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/samuelngs/apple-emoji-ttf/releases/latest)
+          TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tag_name')
+          if [ -z "$TAG_NAME" ] || [ "$TAG_NAME" = "null" ]; then
+            echo "::error::Failed to fetch upstream release tag"
+            exit 1
+          fi
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          
+          # Check font SHA
+          if [ -f "system/fonts/NotoColorEmoji.ttf" ]; then
+            OLD_HASH=$(sha256sum system/fonts/NotoColorEmoji.ttf | cut -d' ' -f1)
+          else
+            OLD_HASH="none"
+          fi
+          
+          curl -L -o new_font.ttf "https://github.com/samuelngs/apple-emoji-ttf/releases/download/${TAG_NAME}/AppleColorEmoji-Linux.ttf"
+          NEW_HASH=$(sha256sum new_font.ttf | cut -d' ' -f1)
+          
+          if [ "$OLD_HASH" != "$NEW_HASH" ]; then
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            mv new_font.ttf system/fonts/NotoColorEmoji.ttf
+            echo "New font fetched."
+          else
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            rm new_font.ttf
+            echo "Font is up-to-date."
+          fi
+
+      - name: Sync Metadata & Commit
+        run: |
+          # If no font update was fetched AND we are running on a schedule, we should skip
+          if [ "${{ steps.upstream.outputs.updated }}" = "false" ] && [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "No upstream font update found during scheduled run. Skipping update..."
+            exit 0
+          fi
+
+          TAG="${{ steps.upstream.outputs.tag }}"
+          # versionCode must be an integer (max 2147483647). YYMMDD + Run Attempt is safe.
+          VERSION_CODE="$(date +%Y%m%d)$(printf "%02d" ${{ github.run_attempt }})"
+          REPO="${{ github.repository }}"
+          ZIP_NAME="Apple_Emoji_Magisk_${VERSION_CODE}.zip"
+
+          echo "Updating module.prop..."
+          sed -i "s/^version=.*/version=${TAG}/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=${VERSION_CODE}/" module.prop
+
+          echo "Updating updater.json..."
+          cat > updater.json << EOF
+          {
+            "version": "${TAG}",
+            "versionCode": ${VERSION_CODE},
+            "zipUrl": "https://github.com/${REPO}/releases/download/latest/${ZIP_NAME}",
+            "changelog": "https://raw.githubusercontent.com/${REPO}/main/Changelog.md"
+          }
+          EOF
+          sed -i 's/^          //' updater.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add system/fonts/NotoColorEmoji.ttf module.prop updater.json
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: auto-sync emoji font & metadata to ${TAG}"
+            git push origin HEAD:main
+          else
+            echo "No repository changes to commit."
+            if [ "${{ github.event_name }}" = "schedule" ]; then
+              echo "Nothing to commit on a scheduled run. Exiting early to avoid empty releases."
+              exit 0
+            fi
+          fi
+
+      - name: Extract metadata for Release
+        id: meta
+        run: |
+          TAG=$(grep '^version=' module.prop | cut -d'=' -f2)
+          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Package module ZIP
+        run: |
+          VERSION_CODE="${{ steps.meta.outputs.code }}"
+          ZIP_NAME="Apple_Emoji_Magisk_${VERSION_CODE}.zip"
+
+          zip -r "$ZIP_NAME" . -x \
+            "*.git*" \
+            "*.github*" \
+            "README.md" \
+            "Changelog.md" \
+            "LICENSE" \
+            "*.png" \
+            ".DS_Store" \
+            "**/.*"
+
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Delete existing release (if clobbering)
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, deleting to recreate with latest commit..."
+            gh release delete "$TAG" --yes --cleanup-tag || true
+          fi
+          
+          if gh release view "latest" >/dev/null 2>&1; then
+            echo "Release latest exists, deleting..."
+            gh release delete "latest" --yes --cleanup-tag || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "Apple Emoji - ${TAG}" \
+            --notes "Auto-built module based on upstream release \`${TAG}\`
+
+          **VersionCode**: ${{ steps.meta.outputs.code }}
+
+          Source: [samuelngs/apple-emoji-ttf@${TAG}](https://github.com/samuelngs/apple-emoji-ttf/releases/tag/${TAG})" \
+            "${{ env.zip_name }}"
+            
+          gh release create "latest" \
+            --title "Apple Emoji - Latest" \
+            --notes "Auto-built module based on upstream release \`${TAG}\`
+
+          **VersionCode**: ${{ steps.meta.outputs.code }}
+
+          Source: [samuelngs/apple-emoji-ttf@${TAG}](https://github.com/samuelngs/apple-emoji-ttf/releases/tag/${TAG})" \
+            "${{ env.zip_name }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup old releases
+        run: |
+          RELEASES=$(gh release list --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName | select(. != "latest")')
+          for tag in $RELEASES; do
+            echo "Deleting old release: $tag"
+            gh release delete "$tag" --yes --cleanup-tag || true
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

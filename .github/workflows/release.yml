@@ -1,0 +1,62 @@
+name: Manual Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract metadata for Release
+        id: meta
+        run: |
+          TAG=$(grep '^version=' module.prop | cut -d'=' -f2)
+          VERSION_CODE=$(grep '^versionCode=' module.prop | cut -d'=' -f2)
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Package module ZIP
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          ZIP_NAME="Apple_Emoji_${TAG}.zip"
+
+          zip -r "$ZIP_NAME" . -x \
+            "*.git*" \
+            "*.github*" \
+            "README.md" \
+            "Changelog.md" \
+            "LICENSE" \
+            "*.png" \
+            ".DS_Store" \
+            "**/.*"
+
+          echo "zip_name=$ZIP_NAME" >> "$GITHUB_ENV"
+
+      - name: Delete existing release (if clobbering)
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG exists, deleting to recreate with latest commit..."
+            gh release delete "$TAG" --yes --cleanup-tag || true
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          gh release create "$TAG" \
+            --title "Apple Emoji - ${TAG} (Manual Build)" \
+            --notes "Manually triggered build for Apple Emoji module.
+            
+          **Version**: ${TAG}
+          **VersionCode**: ${{ steps.meta.outputs.code }}" \
+            "${{ env.zip_name }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
