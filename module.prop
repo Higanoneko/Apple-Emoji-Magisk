@@ -1,7 +1,7 @@
 id=AppleEmoji
 name=Apple Emoji Magisk
 version=macos-26-20260219-2aa12422
-versionCode=2026031001
+versionCode=2026031101
 author=PianCat
 description=Systemlessly replaces emoji font with iOS Emoji. Auto-updated from upstream.
 updateJson=https://raw.githubusercontent.com/PianCat/Apple-Emoji-Magisk/main/updater.json

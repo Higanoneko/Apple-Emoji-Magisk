@@ -1,4 +1,4 @@
-name: CI/CD
+name: Update & Release Apple Emoji Magisk Module
 
 on:
   push:
@@ -77,7 +77,7 @@ jobs:
           {
             "version": "${TAG}",
             "versionCode": ${VERSION_CODE},
-            "zipUrl": "https://github.com/${REPO}/releases/download/latest/${ZIP_NAME}",
+            "zipUrl": "https://github.com/${REPO}/releases/latest/download/${ZIP_NAME}",
             "changelog": "https://raw.githubusercontent.com/${REPO}/main/Changelog.md"
           }
           EOF
@@ -130,11 +130,6 @@ jobs:
             echo "Release $TAG exists, deleting to recreate with latest commit..."
             gh release delete "$TAG" --yes --cleanup-tag || true
           fi
-          
-          if gh release view "latest" >/dev/null 2>&1; then
-            echo "Release latest exists, deleting..."
-            gh release delete "latest" --yes --cleanup-tag || true
-          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -142,16 +137,8 @@ jobs:
         run: |
           TAG="${{ steps.meta.outputs.tag }}"
           gh release create "$TAG" \
+            --latest \
             --title "Apple Emoji - ${TAG}" \
-            --notes "Auto-built module based on upstream release \`${TAG}\`
-
-          **VersionCode**: ${{ steps.meta.outputs.code }}
-
-          Source: [samuelngs/apple-emoji-ttf@${TAG}](https://github.com/samuelngs/apple-emoji-ttf/releases/tag/${TAG})" \
-            "${{ env.zip_name }}"
-            
-          gh release create "latest" \
-            --title "Apple Emoji - Latest" \
             --notes "Auto-built module based on upstream release \`${TAG}\`
 
           **VersionCode**: ${{ steps.meta.outputs.code }}
@@ -163,7 +150,7 @@ jobs:
 
       - name: Cleanup old releases
         run: |
-          RELEASES=$(gh release list --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName | select(. != "latest")')
+          RELEASES=$(gh release list --limit 100 --json tagName,createdAt --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
           for tag in $RELEASES; do
             echo "Deleting old release: $tag"
             gh release delete "$tag" --yes --cleanup-tag || true
