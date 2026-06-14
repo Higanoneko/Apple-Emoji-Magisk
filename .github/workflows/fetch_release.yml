@@ -48,6 +48,7 @@ jobs:
           
           if [ "$OLD_HASH" != "$NEW_HASH" ]; then
             echo "updated=true" >> "$GITHUB_OUTPUT"
+            mkdir -p system/fonts
             mv new_font.ttf system/fonts/NotoColorEmoji.ttf
             echo "New font fetched."
           else
