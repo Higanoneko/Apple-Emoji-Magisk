@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Fetch Upstream Font Tag
         id: upstream
@@ -85,7 +87,9 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add system/fonts/NotoColorEmoji.ttf module.prop updater.json
+          git lfs install --local
+          git lfs track "system/fonts/NotoColorEmoji.ttf"
+          git add .gitattributes system/fonts/NotoColorEmoji.ttf module.prop updater.json
           
           if ! git diff --cached --quiet; then
             git commit -m "chore: auto-sync emoji font & metadata to ${TAG}"
